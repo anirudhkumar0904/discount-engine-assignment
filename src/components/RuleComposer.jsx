@@ -6,6 +6,7 @@
  */
 
 import { useState } from 'react'
+import Icon from './Icon.jsx'
 import { requestRuleParse, interpretParsedRule } from '../inputs/nlRuleInput.js'
 import { processCart, applyCartOffer } from '../engine/discountEngine.js'
 
@@ -19,47 +20,21 @@ const EXAMPLES = [
 const rs = (n) => `Rs.${Math.round(n).toLocaleString('en-IN')}`
 const cap = (s) => s.charAt(0).toUpperCase() + s.slice(1)
 
-const S = {
-  textarea: {
-    width: '100%', minHeight: 56, resize: 'vertical', padding: '0.55rem 0.7rem', fontSize: 13,
-    border: '1px solid #CECECE', borderRadius: 4, fontFamily: 'inherit', boxSizing: 'border-box',
-  },
-  chip: {
-    fontSize: 11, border: '1px solid #CECECE', background: '#fff', borderRadius: 20,
-    padding: '2px 9px', cursor: 'pointer', color: '#131A48',
-  },
-  btn: (primary, disabled) => ({
-    background: disabled ? '#CECECE' : primary ? '#FF5800' : '#fff',
-    color: primary || disabled ? '#fff' : '#131A48',
-    border: primary || disabled ? 'none' : '1px solid #131A48',
-    borderRadius: 4, padding: '0.45rem 1.1rem', fontSize: 12, fontWeight: 700,
-    cursor: disabled ? 'not-allowed' : 'pointer', letterSpacing: '0.03em',
-  }),
-  card: (border, bg) => ({
-    border: `1px solid ${border}`, borderLeft: `3px solid ${border}`, background: bg,
-    borderRadius: 4, padding: '0.7rem 0.9rem', marginTop: '0.7rem', fontSize: 12, color: '#131A48',
-  }),
-  fieldGrid: { display: 'grid', gridTemplateColumns: 'max-content 1fr', gap: '3px 14px', margin: '0.5rem 0' },
-  fieldKey: { color: '#666', fontSize: 11, textTransform: 'uppercase', letterSpacing: '0.04em', paddingTop: 1 },
-}
-
 function ruleFields(rule) {
-  const rows = [
-    ['Rule ID', rule.ruleId],
-    ['Scope', cap(rule.scope)],
-  ]
-  if (rule.scope !== 'cart') rows.push(['Applies to', rule.appliesTo])
+  const rows = [['Scope', cap(rule.scope)]]
+  rows.push(rule.scope === 'cart' ? ['Applies to', 'Entire cart'] : ['Applies to', rule.appliesTo])
   rows.push(['Type', cap(rule.type)])
-  rows.push(['Value', rule.type === 'percentage' ? `${rule.value}%` : rs(rule.value)])
+  rows.push(['Value', rule.type === 'percentage' ? `${rule.value}% off` : `${rs(rule.value)} off`])
   if (rule.scope === 'cart') rows.push(['Min cart value', rs(rule.minCartValue)])
   rows.push(['Stackable', rule.stackable ? 'Yes' : 'No'])
+  rows.push(['Rule ID', rule.ruleId])
   return rows
 }
 
 export default function RuleComposer({ rules, cartItems, onAdd }) {
   const [text, setText] = useState('')
   const [loading, setLoading] = useState(false)
-  const [outcome, setOutcome] = useState(null) // { kind, ... } from interpretParsedRule, or { kind: 'error' }
+  const [outcome, setOutcome] = useState(null)
   const [submittedText, setSubmittedText] = useState('')
 
   async function handleParse() {
@@ -80,7 +55,6 @@ export default function RuleComposer({ rules, cartItems, onAdd }) {
     setText('')
   }
 
-  // Preview the effect on the current cart before committing.
   let preview = null
   if (outcome?.kind === 'confirm' && cartItems.length > 0) {
     const before = applyCartOffer(processCart(cartItems, rules), rules).total
@@ -91,75 +65,83 @@ export default function RuleComposer({ rules, cartItems, onAdd }) {
 
   return (
     <div>
-      <textarea
-        style={S.textarea}
-        placeholder='Describe a discount, e.g. "15% off all Nordic Basics products"'
-        value={text}
-        maxLength={500}
-        onChange={(e) => setText(e.target.value)}
-        onKeyDown={(e) => {
-          if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) handleParse()
-        }}
-      />
-      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 5, margin: '0.4rem 0 0.6rem' }}>
+      <div className="composer">
+        <textarea
+          placeholder='e.g. "15% off all Nordic Basics products"'
+          value={text}
+          maxLength={500}
+          aria-label="Describe a discount rule"
+          onChange={(e) => setText(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleParse() }
+          }}
+        />
+        <div className="composer-foot">
+          <span className="composer-hint">Press Enter to parse</span>
+          <button className="btn btn-primary btn-sm" disabled={!text.trim() || loading} onClick={handleParse}>
+            {loading ? <><span className="spinner" /> Reading…</> : <><Icon name="sparkle" size={14} /> Parse offer</>}
+          </button>
+        </div>
+      </div>
+
+      <div className="chips">
         {EXAMPLES.map((ex) => (
-          <button key={ex} type="button" style={S.chip} onClick={() => { setText(ex); setOutcome(null) }}>
+          <button key={ex} type="button" className="chip" onClick={() => { setText(ex); setOutcome(null) }}>
             {ex}
           </button>
         ))}
       </div>
-      <button style={S.btn(true, !text.trim() || loading)} disabled={!text.trim() || loading} onClick={handleParse}>
-        {loading ? 'Reading rule…' : 'Parse rule'}
-      </button>
 
       {outcome?.kind === 'error' && (
-        <div style={S.card('#c0392b', '#fce8e8')}>
-          <strong>Couldn't parse the rule.</strong> {outcome.message}
+        <div className="alert alert-error">
+          <div className="alert-title">Couldn't parse that offer</div>
+          {outcome.message}
         </div>
       )}
 
       {outcome?.kind === 'invalid' && (
-        <div style={S.card('#c0392b', '#fce8e8')}>
-          <strong>The parsed rule failed validation, so it was not added:</strong>
-          <ul style={{ margin: '4px 0 0 1rem', padding: 0 }}>
-            {outcome.errors.map((e) => <li key={e}>{e}</li>)}
-          </ul>
-          <div style={{ marginTop: 4 }}>Try rewording the description.</div>
+        <div className="alert alert-error">
+          <div className="alert-title">The parsed offer failed validation, so it wasn't added</div>
+          <ul>{outcome.errors.map((e) => <li key={e}>{e}</li>)}</ul>
         </div>
       )}
 
       {outcome?.kind === 'clarify' && (
-        <div style={S.card('#b9770e', '#fff8e6')}>
-          <strong>{outcome.status === 'unsupported' ? 'Not supported' : 'Need more detail'}</strong>
-          <div style={{ color: '#666', fontStyle: 'italic', margin: '2px 0 4px' }}>“{submittedText}”</div>
+        <div className="alert alert-warn">
+          <div className="alert-title">{outcome.status === 'unsupported' ? "This offer can't be expressed yet" : 'Need a bit more detail'}</div>
+          <div style={{ opacity: 0.75, fontStyle: 'italic', marginBottom: 3 }}>“{submittedText}”</div>
           {outcome.message}
         </div>
       )}
 
       {outcome?.kind === 'confirm' && (
-        <div style={S.card('#1e5c2c', '#f0faf2')}>
-          <strong>Confirm this rule?</strong>
-          {outcome.summary && <div style={{ marginTop: 2 }}>{outcome.summary}</div>}
-          <div style={S.fieldGrid}>
-            {ruleFields(outcome.rule).map(([k, v]) => (
-              <div key={k} style={{ display: 'contents' }}>
-                <span style={S.fieldKey}>{k}</span>
-                <span style={{ fontWeight: 600 }}>{v}</span>
-              </div>
-            ))}
+        <div className="confirm">
+          <div className="confirm-head">
+            <div className="confirm-title">Add this offer?</div>
+            {outcome.summary && <div className="confirm-summary">{outcome.summary}</div>}
           </div>
-          {outcome.warnings.map((w) => (
-            <div key={w} style={{ color: '#8a5a00', marginBottom: 3 }}>⚠ {w}</div>
-          ))}
-          {preview && (
-            <div style={{ margin: '4px 0 8px' }}>
-              Cart total if added: {rs(preview.before)} → <strong>{rs(preview.after)}</strong>
-              {preview.after === preview.before && ' (no change)'}
+          <div className="confirm-body">
+            <dl className="fields">
+              {ruleFields(outcome.rule).map(([k, v]) => (
+                <div className="field" key={k}><dt>{k}</dt><dd>{v}</dd></div>
+              ))}
+            </dl>
+            {outcome.warnings.map((w) => (
+              <div key={w} className="alert alert-warn" style={{ marginTop: 0, marginBottom: '0.6rem' }}>{w}</div>
+            ))}
+            {preview && (
+              <div className="impact num">
+                <span>Cart total</span>
+                <span>
+                  {rs(preview.before)} → <strong>{rs(preview.after)}</strong>
+                  {preview.after === preview.before && ' (no change)'}
+                </span>
+              </div>
+            )}
+            <div className="confirm-actions">
+              <button className="btn btn-primary" onClick={handleConfirm}><Icon name="check" size={14} /> Confirm &amp; add</button>
+              <button className="btn btn-secondary" onClick={() => setOutcome(null)}>Discard</button>
             </div>
-          )}
-          <div style={{ display: 'flex', gap: 8 }}>
-            <button style={S.btn(true, false)} onClick={handleConfirm}>Confirm &amp; add</button>
-            <button style={S.btn(false, false)} onClick={() => setOutcome(null)}>Discard</button>
           </div>
         </div>
       )}

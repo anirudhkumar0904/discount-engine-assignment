@@ -12,14 +12,14 @@ cp .env.example .env        # then paste a free GEMINI_API_KEY from aistudio.goo
 npm run dev                 # http://localhost:5173
 ```
 
-Click **Load sample rules + cart** to see the expected results right away. `npm test` runs the test suite (21 tests, no API key needed).
+Click **Load sample data** to see the expected results right away. `npm test` runs the test suite (21 tests, no API key needed).
 
 ## What was built
 
 | Task | Where |
 |---|---|
 | Foundation: engine verified against the brief (ITEM-01…06, Rs.5,932 → Rs.5,339) | `src/engine/discountEngine.js`, `test/engine.test.js` |
-| Task 1: cart-level offers (`scope: cart`, `min_cart_value`) | `applyCartOffer()` in the engine, `CartSummary.jsx` |
+| Task 1: cart-level offers (`scope: cart`, `min_cart_value`) | `applyCartOffer()` in the engine; `CartSummary.jsx` shows the cart offer line and a progress bar to the threshold |
 | Task 2: plain-English rules → LLM → confirmation → engine re-runs | `server/parseRule.js`, `api/parse-rule.js`, `src/inputs/nlRuleInput.js`, `RuleComposer.jsx` |
 | Task 3: PDF cart upload → replaces cart → engine re-runs | `src/inputs/cartTableParser.js`, `src/inputs/pdfCartInput.js` |
 
@@ -47,7 +47,7 @@ src/
     cartTableParser.js     positioned text lines → CartItem[] (pure, unit-tested)
     pdfCartInput.js        PDF bytes → lines via pdf.js (lazy-loaded) → cartTableParser
     nlRuleInput.js         calls /api/parse-rule, then validates + grounds the LLM output
-  components/              FileUploader, RuleComposer, CartSummary, DataTable, ErrorBanner
+  components/              FileUploader (drag & drop), RuleComposer, OfferList, CartSummary (checkout view), ErrorBanner, Icon
   App.jsx                  session state; results are derived with useMemo
 server/parseRule.js        Gemini call (JSON-schema output) — shared by Vercel + dev server
 api/parse-rule.js          Vercel serverless function

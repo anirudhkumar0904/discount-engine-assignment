@@ -1,75 +1,49 @@
 /**
  * FileUploader.jsx
  *
- * Generic click-to-upload area. Reads the chosen file as text (CSV) or as an
- * ArrayBuffer (PDF) and calls onLoad(contents, fileName). Knows nothing about
- * what the file means — parsing belongs to the input adapters.
+ * Click or drag-and-drop file area. Hands the raw File to onFile(file) —
+ * reading and parsing belong to the input adapters, not this component.
  */
 
-import { useRef } from 'react'
+import { useRef, useState } from 'react'
+import Icon from './Icon.jsx'
 
-export default function FileUploader({
-  label,
-  description,
-  accept,
-  readAs = 'text',
-  onLoad,
-  hasData,
-  fileName,
-  busy = false,
-}) {
+export default function FileUploader({ title, hint, accept, onFile, loadedName, busy = false }) {
   const inputRef = useRef(null)
+  const [dragging, setDragging] = useState(false)
 
-  function handleFile(e) {
-    const file = e.target.files[0]
-    if (!file) return
-    const reader = new FileReader()
-    reader.onload = (evt) => onLoad(evt.target.result, file.name)
-    if (readAs === 'arrayBuffer') reader.readAsArrayBuffer(file)
-    else reader.readAsText(file)
-    // Reset input so the same file can be re-uploaded
-    e.target.value = ''
+  function pick(file) {
+    if (file && !busy) onFile(file)
   }
 
-  const active = hasData && !busy
+  const cls = ['dropzone', dragging && 'is-dragging', loadedName && !busy && 'is-loaded'].filter(Boolean).join(' ')
+
   return (
     <div
+      className={cls}
       role="button"
       tabIndex={0}
-      style={{
-        border: `2px dashed ${active ? '#1e5c2c' : '#CECECE'}`,
-        borderRadius: 6,
-        padding: '0.8rem 1rem',
-        background: active ? '#f0faf2' : '#fafafa',
-        cursor: busy ? 'progress' : 'pointer',
-        transition: 'border-color 0.15s',
-      }}
       onClick={() => !busy && inputRef.current?.click()}
       onKeyDown={(e) => (e.key === 'Enter' || e.key === ' ') && !busy && inputRef.current?.click()}
+      onDragOver={(e) => { e.preventDefault(); setDragging(true) }}
+      onDragLeave={() => setDragging(false)}
+      onDrop={(e) => { e.preventDefault(); setDragging(false); pick(e.dataTransfer.files[0]) }}
     >
-      <input ref={inputRef} type="file" accept={accept} style={{ display: 'none' }} onChange={handleFile} />
-      <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem' }}>
-        <span style={{ fontSize: 18 }}>{busy ? '⏳' : active ? '✅' : '📄'}</span>
-        <div style={{ minWidth: 0 }}>
-          <div style={{ fontWeight: 700, fontSize: 13, color: '#131A48' }}>{label}</div>
-          <div style={{ fontSize: 11, color: '#888', marginTop: 2, overflow: 'hidden', textOverflow: 'ellipsis' }}>
-            {busy ? 'Reading…' : active ? fileName : description}
-          </div>
-        </div>
-        <div style={{ marginLeft: 'auto' }}>
-          <span
-            style={{
-              fontSize: 11,
-              fontWeight: 700,
-              color: active ? '#1e5c2c' : '#FF5800',
-              textTransform: 'uppercase',
-              letterSpacing: '0.05em',
-            }}
-          >
-            {active ? 'Change' : 'Upload'}
-          </span>
-        </div>
+      <input
+        ref={inputRef}
+        type="file"
+        accept={accept}
+        style={{ display: 'none' }}
+        onChange={(e) => { pick(e.target.files[0]); e.target.value = '' }}
+      />
+      <div className="dropzone-icon">
+        <Icon name={loadedName && !busy ? 'check' : busy ? 'file' : 'upload'} size={18} />
       </div>
+      <div className="dropzone-text">
+        <div className="dropzone-title">{title}</div>
+        <div className="dropzone-hint">{busy ? 'Reading file…' : loadedName || hint}</div>
+      </div>
+      <span className="dropzone-action">{loadedName ? 'Replace' : 'Browse'}</span>
     </div>
   )
 }
