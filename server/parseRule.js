@@ -13,8 +13,16 @@
 import { GoogleGenAI, ApiError } from '@google/genai'
 import { z } from 'zod'
 
-// "gemini-flash-latest" is Google's alias for the current Flash model (free tier).
-const MODEL = process.env.GEMINI_MODEL || 'gemini-flash-latest'
+// Free-tier Flash models, tried in order. A model that is overloaded (503),
+// retired (404) or rate-limited (429) falls through to the next one, so a
+// Google-side hiccup doesn't break rule entry. GEMINI_MODEL (if set) goes first.
+const MODELS = [
+  ...(process.env.GEMINI_MODEL ? [process.env.GEMINI_MODEL] : []),
+  'gemini-2.5-flash',
+  'gemini-2.5-flash-lite',
+  'gemini-3.5-flash',
+]
+const TRY_NEXT_MODEL = new Set([404, 429, 500, 503])
 export const MAX_INPUT_CHARS = 500
 
 const ParsedRule = z.object({
@@ -92,12 +100,12 @@ export async function parseRuleText(input, { apiKey = process.env.GEMINI_API_KEY
   }
 
   const context = { brands: cleanList(input.context?.brands), platforms: cleanList(input.context?.platforms) }
-  const ai = new GoogleGenAI({ apiKey })
+  // JSON-schema output is only on the v1beta API for some models.
+  const ai = new GoogleGenAI({ apiKey, apiVersion: 'v1beta' })
 
-  let response
-  try {
-    response = await ai.models.generateContent({
-      model: MODEL,
+  const callModel = (model) =>
+    ai.models.generateContent({
+      model,
       contents: buildUserMessage(text, context),
       config: {
         systemInstruction: SYSTEM_PROMPT,
@@ -108,6 +116,19 @@ export async function parseRuleText(input, { apiKey = process.env.GEMINI_API_KEY
         abortSignal: AbortSignal.timeout(30_000),
       },
     })
+
+  let response
+  try {
+    for (let i = 0; i < MODELS.length; i++) {
+      try {
+        response = await callModel(MODELS[i])
+        break
+      } catch (err) {
+        const last = i === MODELS.length - 1
+        if (!last && err instanceof ApiError && TRY_NEXT_MODEL.has(err.status)) continue
+        throw err
+      }
+    }
   } catch (err) {
     if (err instanceof ApiError) {
       if (err.status === 400 && /api key/i.test(err.message)) {

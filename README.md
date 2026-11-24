@@ -72,7 +72,7 @@ api/parse-rule.js          Vercel serverless function
 
 ### Plain-English rules (LLM)
 - **The API key stays server-side.** The brief says a backend is optional, but calling an LLM from the browser would put the API key in public JavaScript. A small serverless function (`api/parse-rule.js`) is the minimum safe option. In dev, the same handler is mounted on the Vite server (`vite.config.js`), so local and deployed behaviour match.
-- **Structured output:** Gemini (`gemini-flash-latest`, temperature 0, free tier) must return `{ status: ok | ambiguous | unsupported, rule, message }`. The JSON schema is generated from a zod schema, and the response is re-checked against that zod schema on the server. The provider sits behind one function (`parseRuleText`), so swapping models touches one file.
+- **Structured output:** Gemini (`gemini-2.5-flash`, falling back to `gemini-2.5-flash-lite` then `gemini-3.5-flash` if a model is overloaded, rate-limited or retired; temperature 0, free tier) must return `{ status: ok | ambiguous | unsupported, rule, message }`. The JSON schema is generated from a zod schema, and the response is re-checked against that zod schema on the server. The provider sits behind one function (`parseRuleText`), so swapping models touches one file.
 - **The model's answer is a candidate, not a rule.** Before anything reaches the confirmation card:
   1. `ambiguous` / `unsupported` → shown as a specific question, not a rule. ("Give a discount for big orders" → asks for the amount and threshold.)
   2. The rule goes through **the same `normaliseRule()` as CSV rows** (percent ≤ 100, positive values, brand/platform rules need a target, cart rules need a threshold).
