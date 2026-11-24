@@ -4,44 +4,54 @@
  * Pure discount calculation logic. No UI, no side effects.
  * All functions take plain objects and return plain objects.
  *
+ * The engine knows nothing about where rules or cart items came from (CSV,
+ * PDF, plain-English via an LLM...). Every input path normalises its data
+ * through ruleSchema.js first, then calls processCart + applyCartOffer.
+ *
  * Data shapes:
  *
  * DiscountRule {
- *   ruleId:    string       — e.g. "RULE-01"
- *   scope:     "brand" | "platform"
- *   appliesTo: string       — e.g. "Natura Casa", "Amazon India"
- *   type:      "percentage" | "flat"
- *   value:     number       — percentage as integer (15 = 15%), flat in rupees
- *   stackable: boolean
+ *   ruleId:       string       — e.g. "RULE-01"
+ *   scope:        "brand" | "platform" | "cart"
+ *   appliesTo:    string|null  — e.g. "Natura Casa", "Amazon India"; null for cart rules
+ *   type:         "percentage" | "flat"
+ *   value:        number       — percentage as integer (15 = 15%), flat in rupees
+ *   stackable:    boolean
+ *   minCartValue: number|null  — cart rules only: threshold on the sum of final item prices
  * }
  *
  * CartItem {
- *   itemId:    string       — e.g. "ITEM-01"
- *   product:   string
- *   brand:     string
- *   platform:  string
- *   basePrice: number       — in rupees
+ *   itemId, product, brand, platform: string
+ *   basePrice: number          — whole rupees
  * }
  *
  * DiscountResult {
- *   itemId:        string
- *   product:       string
- *   brand:         string
- *   platform:      string
- *   basePrice:     number
- *   finalPrice:    number
- *   totalDiscount: number
+ *   itemId, product, brand, platform: string
+ *   basePrice, finalPrice, totalDiscount: number
  *   appliedRules:  string[]
  *   skippedRules:  string[]
+ *   status:        "none" | "applied" | "stacked" | "max"
  *   reasoning:     string   — customer-readable explanation
+ * }
+ *
+ * CartSummary {
+ *   subtotal:        number   — sum of item final prices (before cart offer)
+ *   cartOffers:      { ruleId, label, saving }[]  — empty when no cart offer triggered
+ *   cartDiscount:    number
+ *   total:           number   — what the customer pays
+ *   itemSavings:     number   — sum of item-level discounts
+ *   nextOffer:       { ruleId, label, shortfall } | null — cart offer the customer is close to
  * }
  */
 
+const rupees = (n) => `Rs.${Math.round(n).toLocaleString('en-IN')}`
+
 /**
- * Returns true if the rule applies to this cart item.
+ * Returns true if an item-level rule applies to this cart item.
+ * Cart-scope rules never match a single item — they are handled by applyCartOffer.
  */
 export function ruleMatchesItem(item, rule) {
-  const normalise = (s) => s.trim().toLowerCase()
+  const normalise = (s) => String(s ?? '').trim().toLowerCase()
   if (rule.scope === 'brand') {
     return normalise(item.brand) === normalise(rule.appliesTo)
   }
@@ -54,29 +64,29 @@ export function ruleMatchesItem(item, rule) {
 /**
  * Calculates the rupee discount a rule gives on a given price.
  * Uses the provided price, not the original base price — important for stacking.
+ * A flat discount never exceeds the price it is applied to (no negative prices).
  */
 export function calculateDiscountAmount(price, rule) {
+  if (price <= 0) return 0
   if (rule.type === 'percentage') {
-    return Math.round(price * rule.value / 100)
+    return Math.min(price, Math.round((price * rule.value) / 100))
   }
   if (rule.type === 'flat') {
-    return rule.value
+    return Math.min(price, rule.value)
   }
   return 0
 }
 
 /**
- * Builds the customer-facing reasoning string for an applied rule.
+ * Customer-facing name of an offer, e.g. "Amazon India offer: 15% off",
+ * "Natura Casa brand offer: Rs.150 off", "Cart offer: 10% off".
  */
-function ruleToReasoning(rule) {
-  const scopeLabel = rule.scope === 'brand' ? 'Brand' : 'Platform'
-  if (rule.type === 'percentage') {
-    return `${scopeLabel} offer: ${rule.value}% off`
-  }
-  if (rule.type === 'flat') {
-    return `${scopeLabel} offer: Rs.${rule.value} off`
-  }
-  return `${scopeLabel} offer applied`
+export function describeRule(rule) {
+  const amount = rule.type === 'percentage' ? `${rule.value}% off` : `${rupees(rule.value)} off`
+  if (rule.scope === 'brand') return `${rule.appliesTo} brand offer: ${amount}`
+  if (rule.scope === 'platform') return `${rule.appliesTo} offer: ${amount}`
+  if (rule.scope === 'cart') return `Cart offer: ${amount}`
+  return `Offer: ${amount}`
 }
 
 /**
@@ -84,42 +94,45 @@ function ruleToReasoning(rule) {
  * Returns a DiscountResult.
  *
  * Logic:
- *   1. Find all rules that match this item.
- *   2. Among non-stackable rules, pick the one giving the largest discount.
- *   3. Apply any stackable rules on top of that price.
- *   4. Build the reasoning string from what was applied.
+ *   1. Find all item-level rules that match this item.
+ *   2. Among non-stackable rules, pick the one giving the largest rupee saving
+ *      on the base price (ties go to the rule listed first).
+ *   3. Apply every stackable rule on top of that price, in list order.
+ *   4. Build the reasoning string from what was applied and what lost.
  */
 export function applyDiscounts(item, rules) {
   const matchingRules = rules.filter((r) => ruleMatchesItem(item, r))
 
-  // No rules match — return base price with explanation
+  const base = {
+    itemId: item.itemId,
+    product: item.product,
+    brand: item.brand,
+    platform: item.platform,
+    basePrice: item.basePrice,
+  }
+
   if (matchingRules.length === 0) {
     return {
-      itemId: item.itemId,
-      product: item.product,
-      brand: item.brand,
-      platform: item.platform,
-      basePrice: item.basePrice,
+      ...base,
       finalPrice: item.basePrice,
       totalDiscount: 0,
       appliedRules: [],
       skippedRules: [],
-      reasoning: 'No offers available',
+      status: 'none',
+      reasoning: `No offers available — no current offer covers ${item.brand} products on ${item.platform}`,
     }
   }
 
   const nonStackable = matchingRules.filter((r) => !r.stackable)
   const stackable = matchingRules.filter((r) => r.stackable)
 
-  // Pick the non-stackable rule that gives the largest saving
+  // Pick the non-stackable rule that gives the largest saving (stable sort → ties keep list order)
   let winner = null
   let skipped = []
-
   if (nonStackable.length > 0) {
     const sorted = [...nonStackable].sort(
       (a, b) =>
-        calculateDiscountAmount(item.basePrice, b) -
-        calculateDiscountAmount(item.basePrice, a)
+        calculateDiscountAmount(item.basePrice, b) - calculateDiscountAmount(item.basePrice, a)
     )
     winner = sorted[0]
     skipped = sorted.slice(1)
@@ -128,33 +141,44 @@ export function applyDiscounts(item, rules) {
   // Apply winner first, then stack on top
   let price = item.basePrice
   const appliedRules = []
-  const reasoningParts = []
+  const parts = []
 
   if (winner) {
-    price -= calculateDiscountAmount(price, winner)
+    const saving = calculateDiscountAmount(price, winner)
+    price -= saving
     appliedRules.push(winner.ruleId)
-    reasoningParts.push(ruleToReasoning(winner))
+    let text = `${describeRule(winner)} (saves ${rupees(saving)})`
+    if (skipped.length > 0) {
+      const losers = skipped
+        .map((r) => `${describeRule(r)} (would save ${rupees(calculateDiscountAmount(item.basePrice, r))})`)
+        .join(', ')
+      text += ` — better than ${losers}`
+    }
+    parts.push(text)
   }
 
   for (const rule of stackable) {
-    price -= calculateDiscountAmount(price, rule)
+    const saving = calculateDiscountAmount(price, rule)
+    price -= saving
     appliedRules.push(rule.ruleId)
-    reasoningParts.push(ruleToReasoning(rule))
+    parts.push(
+      `${winner || appliedRules.length > 1 ? 'plus ' : ''}${describeRule(rule)} (saves ${rupees(saving)})`
+    )
   }
 
   const finalPrice = Math.round(price)
+  let status = 'applied'
+  if (appliedRules.length > 1) status = 'stacked'
+  else if (skipped.length > 0) status = 'max'
 
   return {
-    itemId: item.itemId,
-    product: item.product,
-    brand: item.brand,
-    platform: item.platform,
-    basePrice: item.basePrice,
+    ...base,
     finalPrice,
     totalDiscount: item.basePrice - finalPrice,
     appliedRules,
     skippedRules: skipped.map((r) => r.ruleId),
-    reasoning: reasoningParts.join(' + '),
+    status,
+    reasoning: parts.join(', '),
   }
 }
 
@@ -171,4 +195,61 @@ export function processCart(cartItems, rules) {
  */
 export function cartTotal(results) {
   return results.reduce((sum, r) => sum + r.finalPrice, 0)
+}
+
+/**
+ * Applies cart-level rules AFTER item-level discounts.
+ *
+ * The threshold is checked against the sum of final item prices. Among eligible
+ * non-stackable cart rules the biggest saving wins; stackable cart rules apply
+ * on top — the same selection policy as item-level rules.
+ *
+ * If the customer hasn't unlocked a cart offer that would beat what they have,
+ * `nextOffer` says how much more they need to add (a just-below-threshold cart
+ * gets a nudge instead of silence).
+ */
+export function applyCartOffer(results, rules) {
+  const subtotal = cartTotal(results)
+  const itemSavings = results.reduce((s, r) => s + r.totalDiscount, 0)
+  const cartRules = rules.filter((r) => r.scope === 'cart')
+
+  const eligible = cartRules.filter((r) => subtotal >= r.minCartValue)
+  const locked = cartRules.filter((r) => subtotal < r.minCartValue)
+
+  const nonStackable = eligible.filter((r) => !r.stackable)
+  const stackable = eligible.filter((r) => r.stackable)
+
+  let winner = null
+  if (nonStackable.length > 0) {
+    winner = [...nonStackable].sort(
+      (a, b) => calculateDiscountAmount(subtotal, b) - calculateDiscountAmount(subtotal, a)
+    )[0]
+  }
+
+  let price = subtotal
+  const cartOffers = []
+  for (const rule of [winner, ...stackable].filter(Boolean)) {
+    const saving = calculateDiscountAmount(price, rule)
+    price -= saving
+    cartOffers.push({ ruleId: rule.ruleId, label: describeRule(rule), saving })
+  }
+
+  const total = Math.round(price)
+  const cartDiscount = subtotal - total
+
+  // Closest locked offer that would actually save more than what's applied now.
+  let nextOffer = null
+  const better = locked
+    .filter((r) => calculateDiscountAmount(r.minCartValue, r) > cartDiscount)
+    .sort((a, b) => a.minCartValue - b.minCartValue)[0]
+  if (better) {
+    nextOffer = {
+      ruleId: better.ruleId,
+      label: describeRule(better),
+      threshold: better.minCartValue,
+      shortfall: better.minCartValue - subtotal,
+    }
+  }
+
+  return { subtotal, itemSavings, cartOffers, cartDiscount, total, nextOffer }
 }
