@@ -13,13 +13,14 @@
 export const RULE_SCOPES = ['brand', 'platform', 'cart']
 export const RULE_TYPES = ['percentage', 'flat']
 
-/** "Rs.1,299" | "₹1,299.00" | "INR 1299" | 1299 → 1299 (NaN if not a price) */
+/** "Rs.1,299" | "₹1,299.00" | "INR 1299" | "Rs.1,299/-" | "1299 Rs" | 1299 → 1299 (NaN if not a price) */
 export function parseRupees(raw) {
   if (typeof raw === 'number') return raw
   if (raw === undefined || raw === null) return NaN
   const cleaned = String(raw)
     .trim()
     .replace(/^(rs\.?|inr|₹)\s*/i, '')
+    .replace(/\s*(\/-|rs\.?|inr|only)$/i, '')
     .replace(/,/g, '')
     .trim()
   if (!/^\d+(\.\d+)?$/.test(cleaned)) return NaN
@@ -133,8 +134,8 @@ export function normaliseCartItem(raw) {
   if (missing.length > 0) errors.push(`missing ${missing.join(', ')}`)
 
   const basePrice = parseRupees(priceRaw)
-  if (!isBlank(priceRaw) && (isNaN(basePrice) || basePrice <= 0)) {
-    errors.push(`base price must be a positive amount, got "${priceRaw}"`)
+  if (!isBlank(priceRaw) && (isNaN(basePrice) || Math.round(basePrice) < 1)) {
+    errors.push(`base price must be at least Rs.1, got "${priceRaw}"`)
   }
 
   if (errors.length > 0) return { item: null, errors }

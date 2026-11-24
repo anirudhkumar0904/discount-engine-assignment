@@ -14,7 +14,7 @@
  * an offer is added/removed or a new cart is loaded — no stale results.
  */
 
-import { useMemo, useState } from 'react'
+import { useMemo, useRef, useState } from 'react'
 import FileUploader from './components/FileUploader.jsx'
 import ErrorBanner from './components/ErrorBanner.jsx'
 import RuleComposer from './components/RuleComposer.jsx'
@@ -23,6 +23,7 @@ import CartSummary from './components/CartSummary.jsx'
 import Icon from './components/Icon.jsx'
 import { parseRulesCSV, parseCartCSV } from './inputs/csvInput.js'
 import { processCart, applyCartOffer } from './engine/discountEngine.js'
+import { nextRuleId } from './engine/ruleSchema.js'
 import sampleRules from '../sample-data/rules.csv?raw'
 import sampleCart from '../sample-data/cart.csv?raw'
 
@@ -40,6 +41,9 @@ export default function App() {
   const [cartSource, setCartSource] = useState('')
   const [cartNotice, setCartNotice] = useState('')
   const [cartBusy, setCartBusy] = useState(false)
+  const [cartErrorsFatal, setCartErrorsFatal] = useState(false)
+  // Bumped on every cart change; a slow PDF parse only applies if it is still the latest.
+  const cartVersion = useRef(0)
 
   // Engine runs on every change of rules or cart.
   const results = useMemo(() => processCart(cartItems, rules), [cartItems, rules])
@@ -60,8 +64,11 @@ export default function App() {
   }
 
   function addRule(rule) {
-    setRules((prev) => [...prev, rule])
-    setNewRuleIds((prev) => new Set(prev).add(rule.ruleId))
+    // The ID was proposed when the card opened; re-check it against the live list.
+    const taken = rules.some((r) => r.ruleId.toUpperCase() === rule.ruleId.toUpperCase())
+    const safe = taken ? { ...rule, ruleId: nextRuleId(rules) } : rule
+    setRules([...rules, safe])
+    setNewRuleIds((prev) => new Set(prev).add(safe.ruleId))
   }
 
   function removeRule(ruleId) {
@@ -71,6 +78,8 @@ export default function App() {
   // ── Cart ── (route by file type to the matching input adapter)
 
   function replaceCart(items, errors, name, notice = '') {
+    cartVersion.current++
+    setCartErrorsFatal(false)
     setCartItems(items)
     setCartErrors(errors)
     setCartSource(name)
@@ -84,6 +93,7 @@ export default function App() {
       return replaceCart(data, errors, file.name)
     }
 
+    const version = ++cartVersion.current
     setCartBusy(true)
     let parsed
     try {
@@ -91,15 +101,18 @@ export default function App() {
       const { parseCartPDF } = await import('./inputs/pdfCartInput.js')
       parsed = await parseCartPDF(await readBuffer(file))
     } catch (e) {
-      parsed = { items: [], errors: [`The PDF reader failed to load (${e.message}).`], skipped: 0 }
+      parsed = { items: [], errors: [`The PDF reader could not be loaded (${e.message}). Check your connection and try again.`], skipped: 0 }
     } finally {
       setCartBusy(false)
     }
+    // The user loaded another cart / sample / reset while this PDF was parsing.
+    if (version !== cartVersion.current) return
 
     const { items, errors, skipped } = parsed
     if (items.length === 0) {
       // Nothing usable — keep the current cart rather than wiping it.
       setCartErrors([`No cart items could be read from ${file.name}, so your current cart was kept.`, ...errors])
+      setCartErrorsFatal(true)
       setCartNotice('')
       return
     }
@@ -165,8 +178,8 @@ export default function App() {
             {cartNotice && <div className="alert alert-ok">{cartNotice}</div>}
             <ErrorBanner
               errors={cartErrors}
-              tone={cartItems.length > 0 ? 'warn' : 'error'}
-              title={cartItems.length > 0 ? 'Some rows were skipped' : undefined}
+              tone={cartErrorsFatal || cartItems.length === 0 ? 'error' : 'warn'}
+              title={cartErrorsFatal ? "This file couldn't be used" : cartItems.length > 0 ? 'Some rows were skipped' : undefined}
             />
           </section>
 

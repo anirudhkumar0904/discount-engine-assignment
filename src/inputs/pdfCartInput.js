@@ -25,13 +25,17 @@ export async function parseCartPDF(buffer) {
   }
 
   const lines = []
-  for (let p = 1; p <= doc.numPages; p++) {
-    const page = await doc.getPage(p)
-    const content = await page.getTextContent()
-    const fragments = content.items
-      .filter((it) => typeof it.str === 'string' && it.str.trim() !== '')
-      .map((it) => ({ str: it.str, x: it.transform[4], y: it.transform[5] }))
-    lines.push(...groupIntoLines(fragments))
+  try {
+    for (let p = 1; p <= doc.numPages; p++) {
+      const page = await doc.getPage(p)
+      const content = await page.getTextContent()
+      const fragments = content.items
+        .filter((it) => typeof it.str === 'string' && it.str.trim() !== '')
+        .map((it) => ({ str: it.str, x: it.transform[4], y: it.transform[5], w: it.width || 0 }))
+      lines.push(...groupIntoLines(fragments))
+    }
+  } catch (e) {
+    return { items: [], errors: [`Could not read the text in this PDF (${e.message}).`], skipped: 0 }
   }
 
   if (lines.length === 0) {

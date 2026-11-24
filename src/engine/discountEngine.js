@@ -65,6 +65,7 @@ export function ruleMatchesItem(item, rule) {
  * Calculates the rupee discount a rule gives on a given price.
  * Uses the provided price, not the original base price — important for stacking.
  * A flat discount never exceeds the price it is applied to (no negative prices).
+ * All amounts are whole rupees, so the saving shown always equals the price change.
  */
 export function calculateDiscountAmount(price, rule) {
   if (price <= 0) return 0
@@ -72,7 +73,8 @@ export function calculateDiscountAmount(price, rule) {
     return Math.min(price, Math.round((price * rule.value) / 100))
   }
   if (rule.type === 'flat') {
-    return Math.min(price, rule.value)
+    // Whole rupees, like every other amount the customer sees.
+    return Math.min(price, Math.round(rule.value))
   }
   return 0
 }
@@ -142,18 +144,25 @@ export function applyDiscounts(item, rules) {
   let price = item.basePrice
   const appliedRules = []
   const parts = []
+  let beatOthers = false
 
   if (winner) {
     const saving = calculateDiscountAmount(price, winner)
     price -= saving
     appliedRules.push(winner.ruleId)
     let text = `${describeRule(winner)} (saves ${rupees(saving)})`
-    if (skipped.length > 0) {
-      const losers = skipped
+    const worse = skipped.filter((r) => calculateDiscountAmount(item.basePrice, r) < saving)
+    const tied = skipped.filter((r) => calculateDiscountAmount(item.basePrice, r) === saving)
+    if (worse.length > 0) {
+      const losers = worse
         .map((r) => `${describeRule(r)} (would save ${rupees(calculateDiscountAmount(item.basePrice, r))})`)
         .join(', ')
       text += ` — better than ${losers}`
     }
+    if (tied.length > 0) {
+      text += `${worse.length ? ';' : ' —'} same saving as ${tied.map(describeRule).join(', ')}, so only one applies`
+    }
+    beatOthers = worse.length > 0
     parts.push(text)
   }
 
@@ -168,8 +177,9 @@ export function applyDiscounts(item, rules) {
 
   const finalPrice = Math.round(price)
   let status = 'applied'
-  if (appliedRules.length > 1) status = 'stacked'
-  else if (skipped.length > 0) status = 'max'
+  if (item.basePrice - finalPrice === 0) status = 'none'
+  else if (appliedRules.length > 1) status = 'stacked'
+  else if (beatOthers) status = 'max'
 
   return {
     ...base,
@@ -208,6 +218,27 @@ export function cartTotal(results) {
  * `nextOffer` says how much more they need to add (a just-below-threshold cart
  * gets a nudge instead of silence).
  */
+/**
+ * Picks and applies cart rules to a subtotal: best non-stackable rule, then
+ * every stackable rule on top (the same policy as item-level rules).
+ */
+function selectCartOffers(subtotal, eligible) {
+  const nonStackable = eligible.filter((r) => !r.stackable)
+  const stackable = eligible.filter((r) => r.stackable)
+  const winner = [...nonStackable].sort(
+    (a, b) => calculateDiscountAmount(subtotal, b) - calculateDiscountAmount(subtotal, a)
+  )[0]
+
+  let price = subtotal
+  const offers = []
+  for (const rule of [winner, ...stackable].filter(Boolean)) {
+    const saving = calculateDiscountAmount(price, rule)
+    price -= saving
+    offers.push({ ruleId: rule.ruleId, label: describeRule(rule), saving })
+  }
+  return { offers, total: price }
+}
+
 export function applyCartOffer(results, rules) {
   const subtotal = cartTotal(results)
   const itemSavings = results.reduce((s, r) => s + r.totalDiscount, 0)
@@ -216,38 +247,27 @@ export function applyCartOffer(results, rules) {
   const eligible = cartRules.filter((r) => subtotal >= r.minCartValue)
   const locked = cartRules.filter((r) => subtotal < r.minCartValue)
 
-  const nonStackable = eligible.filter((r) => !r.stackable)
-  const stackable = eligible.filter((r) => r.stackable)
-
-  let winner = null
-  if (nonStackable.length > 0) {
-    winner = [...nonStackable].sort(
-      (a, b) => calculateDiscountAmount(subtotal, b) - calculateDiscountAmount(subtotal, a)
-    )[0]
-  }
-
-  let price = subtotal
-  const cartOffers = []
-  for (const rule of [winner, ...stackable].filter(Boolean)) {
-    const saving = calculateDiscountAmount(price, rule)
-    price -= saving
-    cartOffers.push({ ruleId: rule.ruleId, label: describeRule(rule), saving })
-  }
-
-  const total = Math.round(price)
+  const { offers: cartOffers, total } = selectCartOffers(subtotal, eligible)
   const cartDiscount = subtotal - total
 
-  // Closest locked offer that would actually save more than what's applied now.
+  // Nearest locked offer that would actually add a saving once reached:
+  // compare the cart discount at its threshold with and without it.
   let nextOffer = null
-  const better = locked
-    .filter((r) => calculateDiscountAmount(r.minCartValue, r) > cartDiscount)
+  const worthUnlocking = locked
+    .filter((r) => {
+      const at = r.minCartValue
+      const reachable = cartRules.filter((x) => x !== r && at >= x.minCartValue)
+      const without = at - selectCartOffers(at, reachable).total
+      const withIt = at - selectCartOffers(at, [...reachable, r]).total
+      return withIt > without
+    })
     .sort((a, b) => a.minCartValue - b.minCartValue)[0]
-  if (better) {
+  if (worthUnlocking) {
     nextOffer = {
-      ruleId: better.ruleId,
-      label: describeRule(better),
-      threshold: better.minCartValue,
-      shortfall: better.minCartValue - subtotal,
+      ruleId: worthUnlocking.ruleId,
+      label: describeRule(worthUnlocking),
+      threshold: worthUnlocking.minCartValue,
+      shortfall: worthUnlocking.minCartValue - subtotal,
     }
   }
 

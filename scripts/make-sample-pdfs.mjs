@@ -45,6 +45,40 @@ async function monospacePdf(file) {
   writeFileSync(file, await doc.save())
 }
 
+
+// A realistic invoice: extra S.No/Qty columns, a wrapped product name,
+// "Rs.x/-" prices and footer lines — none of which should break parsing.
+async function messyInvoicePdf(file) {
+  const doc = await PDFDocument.create()
+  const page = doc.addPage([595, 842])
+  const font = await doc.embedFont(StandardFonts.Helvetica)
+  const bold = await doc.embedFont(StandardFonts.HelveticaBold)
+  const X = [40, 75, 215, 315, 415, 470]
+  const H = ['S.No', 'Product', 'Brand', 'Platform', 'Qty', 'Base Price']
+  let y = 790
+  page.drawText('TAX INVOICE  |  Order #OP-9922  |  16 Jan 2025', { x: 40, y, size: 11, font: bold })
+  y -= 34
+  H.forEach((h, i) => page.drawText(h, { x: X[i], y, size: 10, font: bold }))
+  y -= 8
+  page.drawLine({ start: { x: 40, y }, end: { x: 540, y }, thickness: 0.8 })
+  y -= 18
+  const rows = [
+    ['1', 'Cushion Cover', 'Natura Casa', 'Amazon India', '1', 'Rs.1,299/-'],
+    ['2', 'Bed Sheet Set (King,', 'Natura Casa', 'Flipkart', '1', 'Rs.849/-'],
+    ['', 'Cotton)', '', '', '', ''],
+    ['3', 'Ceramic Vase', 'LivSpace Pro', 'Noon', '1', 'Rs.2,499/-'],
+  ]
+  for (const r of rows) {
+    r.forEach((c, i) => c && page.drawText(c, { x: X[i], y, size: 10, font }))
+    y -= 18
+  }
+  y -= 6
+  page.drawText('Order Total: Rs.4,647/-', { x: 315, y, size: 10, font: bold })
+  page.drawText('GST included where applicable', { x: 40, y: y - 18, size: 9, font })
+  page.drawText('Thank you for shopping with us!', { x: 40, y: y - 34, size: 9, font })
+  writeFileSync(file, await doc.save())
+}
+
 await tablePdf('sample-data/cart.pdf', ROWS)
 await tablePdf(
   'sample-data/cart-malformed.pdf',
@@ -59,4 +93,5 @@ await tablePdf(
   'Total  Rs.5,594'
 )
 await monospacePdf('sample-data/cart-monospace.pdf')
-console.log('wrote sample-data/cart.pdf, cart-malformed.pdf, cart-monospace.pdf')
+await messyInvoicePdf('sample-data/cart-invoice.pdf')
+console.log('wrote sample-data/cart.pdf, cart-malformed.pdf, cart-monospace.pdf, cart-invoice.pdf')

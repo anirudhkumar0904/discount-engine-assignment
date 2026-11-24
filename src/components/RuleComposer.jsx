@@ -5,7 +5,7 @@
  * Nothing is added to the active rules until the user presses Confirm.
  */
 
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import Icon from './Icon.jsx'
 import { requestRuleParse, interpretParsedRule } from '../inputs/nlRuleInput.js'
 import { processCart, applyCartOffer } from '../engine/discountEngine.js'
@@ -36,23 +36,57 @@ export default function RuleComposer({ rules, cartItems, onAdd }) {
   const [loading, setLoading] = useState(false)
   const [outcome, setOutcome] = useState(null)
   const [submittedText, setSubmittedText] = useState('')
+  const inFlight = useRef(null) // AbortController of the request in progress
+
+  // Always interpret a reply against the rules/cart as they are NOW, not as they
+  // were when the request started.
+  const latest = useRef({ rules, cartItems })
+  latest.current = { rules, cartItems }
+
+  function cancelInFlight() {
+    inFlight.current?.abort()
+    inFlight.current = null
+    setLoading(false)
+  }
+
+  // Offers or cart changed (upload, reset, removal): a pending card would be
+  // stale (rule ID, warnings, preview), so drop it and any request in flight.
+  useEffect(() => {
+    cancelInFlight()
+    setOutcome(null)
+  }, [rules, cartItems])
+
+  useEffect(() => () => inFlight.current?.abort(), [])
 
   async function handleParse() {
     const input = text.trim()
     if (!input || loading) return
+    const controller = new AbortController()
+    inFlight.current = controller
     setLoading(true)
     setOutcome(null)
     setSubmittedText(input)
-    const { parsed, error } = await requestRuleParse(input, cartItems)
+
+    const { parsed, error, aborted } = await requestRuleParse(input, latest.current.cartItems, {
+      signal: controller.signal,
+    })
+    if (aborted || inFlight.current !== controller) return // superseded
+    inFlight.current = null
     setLoading(false)
     if (error) return setOutcome({ kind: 'error', message: error })
-    setOutcome(interpretParsedRule(parsed, input, rules, cartItems))
+    setOutcome(interpretParsedRule(parsed, input, latest.current.rules, latest.current.cartItems))
   }
 
   function handleConfirm() {
     onAdd(outcome.rule)
     setOutcome(null)
-    setText('')
+    if (text.trim() === submittedText) setText('')
+  }
+
+  function pickExample(ex) {
+    cancelInFlight()
+    setText(ex)
+    setOutcome(null)
   }
 
   let preview = null
@@ -86,7 +120,7 @@ export default function RuleComposer({ rules, cartItems, onAdd }) {
 
       <div className="chips">
         {EXAMPLES.map((ex) => (
-          <button key={ex} type="button" className="chip" onClick={() => { setText(ex); setOutcome(null) }}>
+          <button key={ex} type="button" className="chip" onClick={() => pickExample(ex)}>
             {ex}
           </button>
         ))}

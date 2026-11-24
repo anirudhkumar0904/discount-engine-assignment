@@ -41,7 +41,7 @@ async function pdfLines(path) {
     const content = await (await doc.getPage(p)).getTextContent()
     const frags = content.items
       .filter((it) => it.str && it.str.trim())
-      .map((it) => ({ str: it.str, x: it.transform[4], y: it.transform[5] }))
+      .map((it) => ({ str: it.str, x: it.transform[4], y: it.transform[5], w: it.width || 0 }))
     lines.push(...groupIntoLines(frags))
   }
   return lines
@@ -75,7 +75,7 @@ test('PDF: malformed rows are skipped with a reason; footer total ignored', asyn
   assert.deepEqual(asRows(items), [EXPECTED_CART[0], EXPECTED_CART[4], EXPECTED_CART[5]])
   assert.equal(skipped, 3)
   assert.match(errors[0], /Bed Sheet Set.*missing base_price/)
-  assert.match(errors[1], /Wall Shelf.*base price must be a positive amount, got "Rs.TBD"/)
+  assert.match(errors[1], /Wall Shelf.*base price must be at least Rs.1, got "Rs.TBD"/)
   assert.match(errors[2], /Ceramic Vase.*missing brand/)
 })
 
@@ -126,7 +126,7 @@ test('NL: hallucinated numbers are rejected even if the model says ok', () => {
     'Give a discount for big orders', rules, cart
   )
   assert.equal(out.kind, 'clarify')
-  assert.match(out.message, /discount value 10 or the minimum cart value 5000/)
+  assert.match(out.message, /doesn.t state the discount 10/)
 })
 
 test('NL: invalid rule from the model fails the shared validator', () => {
