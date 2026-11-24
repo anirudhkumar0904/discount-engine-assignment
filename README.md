@@ -1,6 +1,6 @@
 # Opptra Discount Engine — FDE Intern Assignment
 
-**Live demo:** _LIVE_URL_PLACEHOLDER_  ·  ![CI](https://github.com/anirudhkumar0904/discount-engine-assignment/actions/workflows/ci.yml/badge.svg)
+**Live demo:** https://discount-engine-assignment-pi.vercel.app  ·  ![CI](https://github.com/anirudhkumar0904/discount-engine-assignment/actions/workflows/ci.yml/badge.svg)
 
 A customer-facing cart pricing engine. It picks the biggest saving per item, stacks stackable offers, applies cart-level offers, and explains every price in plain language. Offers can come from a CSV or from plain English (parsed by an LLM). Carts can come from a CSV or a PDF.
 
