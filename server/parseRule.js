@@ -1,5 +1,5 @@
 /**
- * server/parseRule.js — plain English → candidate DiscountRule, via Claude.
+ * server/parseRule.js — plain English → candidate DiscountRule, via Google Gemini.
  *
  * Runs server-side only (Vercel function in production, Vite middleware in
  * dev) so the API key never reaches the browser.
@@ -10,11 +10,11 @@
  * in the rule literally appears in what the user typed.
  */
 
-import Anthropic from '@anthropic-ai/sdk'
+import { GoogleGenAI, ApiError } from '@google/genai'
 import { z } from 'zod'
-import { betaZodOutputFormat } from '@anthropic-ai/sdk/helpers/beta/zod'
 
-const MODEL = process.env.ANTHROPIC_MODEL || 'claude-opus-5-5'
+// "gemini-flash-latest" is Google's alias for the current Flash model (free tier).
+const MODEL = process.env.GEMINI_MODEL || 'gemini-flash-latest'
 export const MAX_INPUT_CHARS = 500
 
 const ParsedRule = z.object({
@@ -31,6 +31,12 @@ const ParsedRule = z.object({
     .nullable(),
   message: z.string(),
 })
+
+// JSON Schema sent to Gemini so it can only answer in this shape.
+const RESPONSE_SCHEMA = (() => {
+  const { $schema, ...schema } = z.toJSONSchema(ParsedRule)
+  return schema
+})()
 
 const SYSTEM_PROMPT = `You turn a merchant's plain-English description of ONE discount into a structured rule for a shopping-cart pricing engine. Customers see the result at checkout, so never guess.
 
@@ -72,7 +78,7 @@ const cleanList = (v) =>
  * @returns {Promise<{ status: number, body: object }>} an HTTP-ish result so both
  *   the Vercel function and the dev middleware can send it unchanged.
  */
-export async function parseRuleText(input, { apiKey = process.env.ANTHROPIC_API_KEY } = {}) {
+export async function parseRuleText(input, { apiKey = process.env.GEMINI_API_KEY } = {}) {
   const text = typeof input?.text === 'string' ? input.text.trim() : ''
   if (!text) return { status: 400, body: { error: 'Describe a discount rule first.' } }
   if (text.length > MAX_INPUT_CHARS) {
@@ -81,43 +87,62 @@ export async function parseRuleText(input, { apiKey = process.env.ANTHROPIC_API_
   if (!apiKey) {
     return {
       status: 503,
-      body: { error: 'The rule parser is not configured on this server (missing ANTHROPIC_API_KEY).' },
+      body: { error: 'The rule parser is not configured on this server (missing GEMINI_API_KEY).' },
     }
   }
 
   const context = { brands: cleanList(input.context?.brands), platforms: cleanList(input.context?.platforms) }
-  const client = new Anthropic({ apiKey, timeout: 60_000, maxRetries: 2 })
+  const ai = new GoogleGenAI({ apiKey })
 
+  let response
   try {
-    const response = await client.beta.messages.parse({
+    response = await ai.models.generateContent({
       model: MODEL,
-      max_tokens: 4000,
-      betas: ['server-side-fallback-2026-07-01'],
-      fallbacks: 'default',
-      output_config: { effort: 'low', format: betaZodOutputFormat(ParsedRule) },
-      system: SYSTEM_PROMPT,
-      messages: [{ role: 'user', content: buildUserMessage(text, context) }],
+      contents: buildUserMessage(text, context),
+      config: {
+        systemInstruction: SYSTEM_PROMPT,
+        responseMimeType: 'application/json',
+        responseJsonSchema: RESPONSE_SCHEMA,
+        temperature: 0,
+        maxOutputTokens: 4000,
+        abortSignal: AbortSignal.timeout(30_000),
+      },
     })
-
-    if (response.stop_reason === 'refusal') {
-      return { status: 422, body: { error: 'That request could not be processed. Try rephrasing the rule.' } }
-    }
-    if (!response.parsed_output) {
-      return { status: 502, body: { error: 'The parser returned something unreadable. Please try again.' } }
-    }
-    return { status: 200, body: response.parsed_output }
   } catch (err) {
-    if (err instanceof Anthropic.AuthenticationError) {
-      return { status: 503, body: { error: 'The rule parser is misconfigured (invalid API key).' } }
+    if (err instanceof ApiError) {
+      if (err.status === 400 && /api key/i.test(err.message)) {
+        return { status: 503, body: { error: 'The rule parser is misconfigured (invalid API key).' } }
+      }
+      if (err.status === 401 || err.status === 403) {
+        return { status: 503, body: { error: 'The rule parser is misconfigured (API key rejected).' } }
+      }
+      if (err.status === 429) {
+        return { status: 429, body: { error: 'Too many requests right now — wait a moment and try again.' } }
+      }
+      return { status: 502, body: { error: `The language model service failed (${err.status}). Try again.` } }
     }
-    if (err instanceof Anthropic.RateLimitError) {
-      return { status: 429, body: { error: 'Too many requests right now — wait a moment and try again.' } }
+    if (err?.name === 'AbortError' || err?.name === 'TimeoutError') {
+      return { status: 504, body: { error: 'The language model took too long. Try again.' } }
     }
-    if (err instanceof Anthropic.APIError) {
-      return { status: 502, body: { error: `The language model service failed (${err.status ?? 'network'}). Try again.` } }
-    }
-    return { status: 500, body: { error: 'Unexpected error while parsing the rule.' } }
+    return { status: 502, body: { error: 'Could not reach the language model service. Try again.' } }
   }
+
+  // Even with a schema, never trust the raw text: parse + validate the shape.
+  let json
+  try {
+    json = JSON.parse(response.text ?? '')
+  } catch {
+    const blocked = response.promptFeedback?.blockReason
+    return {
+      status: blocked ? 422 : 502,
+      body: { error: blocked ? 'That request could not be processed. Try rephrasing the rule.' : 'The parser returned something unreadable. Please try again.' },
+    }
+  }
+  const checked = ParsedRule.safeParse(json)
+  if (!checked.success) {
+    return { status: 502, body: { error: 'The parser returned an unexpected format. Please try again.' } }
+  }
+  return { status: 200, body: checked.data }
 }
 
 /** Node (req, res) handler shared by the Vercel function and the Vite dev server. */

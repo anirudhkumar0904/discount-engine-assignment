@@ -11,7 +11,7 @@
     "sample-pdfs": "node scripts/make-sample-pdfs.mjs"
   },
   "dependencies": {
-    "@anthropic-ai/sdk": "^1.13.0",
+    "@google/genai": "^3.6.1",
     "papaparse": "^5.4.1",
     "pdfjs-dist": "^4.10.38",
     "react": "^18.2.0",

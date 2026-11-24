@@ -22,7 +22,7 @@ export default defineConfig(({ mode }) => {
   // Load .env (all keys, not just VITE_*) into process.env for the dev API only.
   // Nothing here is exposed to the browser bundle.
   const env = loadEnv(mode, process.cwd(), '')
-  for (const key of ['ANTHROPIC_API_KEY', 'ANTHROPIC_MODEL']) {
+  for (const key of ['GEMINI_API_KEY', 'GEMINI_MODEL']) {
     if (env[key] && !process.env[key]) process.env[key] = env[key]
   }
   return { plugins: [react(), devApi()] }

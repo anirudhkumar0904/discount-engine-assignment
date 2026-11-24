@@ -2,13 +2,13 @@
 
 **Live demo:** _LIVE_URL_PLACEHOLDER_
 
-A customer-facing cart pricing engine. It picks the biggest saving per item, stacks stackable offers, applies cart-level offers, and explains every price in plain language. Rules can come from a CSV or from plain English (parsed by Claude). Carts can come from a CSV or a PDF.
+A customer-facing cart pricing engine. It picks the biggest saving per item, stacks stackable offers, applies cart-level offers, and explains every price in plain language. Rules can come from a CSV or from plain English (parsed by Google Gemini). Carts can come from a CSV or a PDF.
 
 ## Run locally (3 steps)
 
 ```bash
 npm install
-cp .env.example .env        # then paste your ANTHROPIC_API_KEY (only needed for plain-English rules)
+cp .env.example .env        # then paste a free GEMINI_API_KEY from aistudio.google.com/apikey (only for plain-English rules)
 npm run dev                 # http://localhost:5173
 ```
 
@@ -49,7 +49,7 @@ src/
     nlRuleInput.js         calls /api/parse-rule, then validates + grounds the LLM output
   components/              FileUploader, RuleComposer, CartSummary, DataTable, ErrorBanner
   App.jsx                  session state; results are derived with useMemo
-server/parseRule.js        Claude call (structured output) — shared by Vercel + dev server
+server/parseRule.js        Gemini call (JSON-schema output) — shared by Vercel + dev server
 api/parse-rule.js          Vercel serverless function
 ```
 
@@ -72,14 +72,14 @@ api/parse-rule.js          Vercel serverless function
 
 ### Plain-English rules (LLM)
 - **The API key stays server-side.** The brief says a backend is optional, but calling an LLM from the browser would put the API key in public JavaScript. A small serverless function (`api/parse-rule.js`) is the minimum safe option. In dev, the same handler is mounted on the Vite server (`vite.config.js`), so local and deployed behaviour match.
-- **Structured output:** Claude (`claude-opus-5-5`, low effort) must return `{ status: ok | ambiguous | unsupported, rule, message }`, enforced by a JSON schema (zod).
+- **Structured output:** Gemini (`gemini-flash-latest`, temperature 0, free tier) must return `{ status: ok | ambiguous | unsupported, rule, message }`. The JSON schema is generated from a zod schema, and the response is re-checked against that zod schema on the server. The provider sits behind one function (`parseRuleText`), so swapping models touches one file.
 - **The model's answer is a candidate, not a rule.** Before anything reaches the confirmation card:
   1. `ambiguous` / `unsupported` → shown as a specific question, not a rule. ("Give a discount for big orders" → asks for the amount and threshold.)
   2. The rule goes through **the same `normaliseRule()` as CSV rows** (percent ≤ 100, positive values, brand/platform rules need a target, cart rules need a threshold).
   3. **Grounding check:** every number in the rule must literally appear in what the user typed (`Rs.5,000`, `5k`, `20%`). If the model invents "10%" for a vague request, the result is rejected and the user is asked for the number. The trade-off: "five percent" written in words is rejected too. I think a rare re-type is better than a hallucinated discount at checkout.
   4. **Soft warnings** don't block: the brand/platform isn't in the current cart (possible typo), or the rule duplicates an active one.
 - **The confirmation card** shows every parsed field, the warnings, and a preview (*Cart total if added: Rs.5,339 → Rs.X*). Confirm adds it, Discard drops it. Added rules can also be removed (✕) from the active rules table.
-- Network errors, rate limits, a missing key and refusals each show a readable message. The input is capped at 500 characters, and the brands and platforms in the cart are sent as context so "natura casa" becomes "Natura Casa".
+- Network errors, rate limits, timeouts, a missing key and blocked prompts each show a readable message. The input is capped at 500 characters, and the brands and platforms in the cart are sent as context so "natura casa" becomes "Natura Casa".
 
 ### PDF upload
 - **Parsed in the browser** with pdf.js, so no server is needed for PDFs. It is lazy-loaded, so the ~370 kB library only downloads when someone uploads a PDF.
@@ -108,5 +108,5 @@ Regenerate the PDFs with `npm run sample-pdfs`.
 ## Deploying (Vercel)
 
 1. Import the repo in Vercel (framework: Vite; `api/` is picked up automatically).
-2. Add the environment variable `ANTHROPIC_API_KEY`.
+2. Add the environment variable `GEMINI_API_KEY` (free from https://aistudio.google.com/apikey).
 3. Deploy. The CSV, PDF and cart-offer features work without the key; only plain-English rules need it.
