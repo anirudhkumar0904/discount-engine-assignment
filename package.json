@@ -8,7 +8,8 @@
     "build": "vite build",
     "preview": "vite preview",
     "test": "node --test \"test/*.test.js\"",
-    "sample-pdfs": "node scripts/make-sample-pdfs.mjs"
+    "sample-pdfs": "node scripts/make-sample-pdfs.mjs",
+    "eval:llm": "node --env-file=.env scripts/eval-rule-parser.mjs"
   },
   "dependencies": {
     "@google/genai": "^3.6.1",
@@ -22,5 +23,8 @@
     "@vitejs/plugin-react": "^4.2.1",
     "pdf-lib": "^1.17.1",
     "vite": "^5.0.0"
+  },
+  "engines": {
+    "node": ">=20"
   }
 }
