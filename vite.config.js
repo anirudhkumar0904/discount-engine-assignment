@@ -11,8 +11,17 @@ function devApi() {
     name: 'dev-api',
     configureServer(server) {
       server.middlewares.use('/api/parse-rule', async (req, res) => {
-        const { handleParseRuleRequest } = await server.ssrLoadModule('/server/parseRule.js')
-        await handleParseRuleRequest(req, res)
+        try {
+          const { handleParseRuleRequest } = await server.ssrLoadModule('/server/parseRule.js')
+          await handleParseRuleRequest(req, res)
+        } catch (e) {
+          // Never leave the request hanging in dev (e.g. a syntax error while editing).
+          if (!res.writableEnded) {
+            res.statusCode = 500
+            res.setHeader('Content-Type', 'application/json')
+            res.end(JSON.stringify({ error: `Dev server error: ${e.message}` }))
+          }
+        }
       })
     },
   }
